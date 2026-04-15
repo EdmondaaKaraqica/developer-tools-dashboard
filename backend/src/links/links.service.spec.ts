@@ -1,7 +1,6 @@
 import { ConflictException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { LinksService } from './links.service';
-import { ELASTICSEARCH_CLIENT } from '../elasticsearch/elasticsearch.module';
 
 function makeEsMock() {
   return {

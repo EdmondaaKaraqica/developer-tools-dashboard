@@ -51,7 +51,27 @@ export async function authFetch(path, options = {}) {
     setToken(null);
     throw new Error('Session expired — sign in again');
   }
-  if (!r.ok) throw new Error((await r.text()) || r.statusText);
+  if (!r.ok) {
+    let detail = r.statusText;
+    try {
+      const ct = r.headers.get('content-type');
+      if (ct && ct.includes('application/json')) {
+        const j = await r.json();
+        if (j?.message) {
+          detail = Array.isArray(j.message) ? j.message.join(', ') : j.message;
+        } else if (j?.error) {
+          detail = j.error;
+        }
+      } else {
+        detail = (await r.text()) || r.statusText;
+      }
+    } catch {
+      detail = r.statusText;
+    }
+
+    detail = detail.replace(/url must be a URL address/i, 'Please enter a valid URL (including https://)');
+    throw new Error(detail || r.statusText);
+  }
   if (r.status === 204) return null;
   const ct = r.headers.get('content-type');
   if (ct && ct.includes('application/json')) return r.json();

@@ -52,7 +52,14 @@ export class LinksService implements OnModuleInit {
 
   private normalizeUrl(url: string): string {
     const raw = url.trim();
-    const u = new URL(raw);
+    let u: URL;
+    try {
+      u = new URL(raw);
+    } catch {
+      throw new BadRequestException(
+        'Please enter a valid URL (including https://)',
+      );
+    }
 
     // Canonicalize for uniqueness: lowercase scheme/host, drop fragment, drop default ports, drop trailing slash.
     u.protocol = u.protocol.toLowerCase();
@@ -253,11 +260,17 @@ export class LinksService implements OnModuleInit {
     }
 
     // Best-effort delete of old doc after creating the new one.
-    await this.es.delete({
-      index: this.indexName,
-      id,
-      refresh: 'wait_for',
-    });
+    try {
+      await this.es.delete({
+        index: this.indexName,
+        id,
+        refresh: 'wait_for',
+      });
+    } catch (e: unknown) {
+      this.logger.warn(
+        `Link URL changed and new doc was created, but deleting old doc failed (id=${id}).`,
+      );
+    }
 
     return { id: nextId, ...next };
   }

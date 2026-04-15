@@ -8,6 +8,7 @@ const password = ref('');
 const loginErr = ref('');
 const links = ref([]);
 const loadErr = ref('');
+const formErr = ref('');
 const busy = ref(false);
 
 const editingId = ref(null);
@@ -94,8 +95,21 @@ function cancelEdit() {
 
 async function save() {
   loadErr.value = '';
+  formErr.value = '';
   busy.value = true;
   try {
+    if (!form.value.title?.trim()) {
+      formErr.value = 'Title is required.';
+      return;
+    }
+    if (!form.value.url?.trim()) {
+      formErr.value = 'URL is required.';
+      return;
+    }
+    if (!/^https?:\/\//i.test(form.value.url.trim())) {
+      formErr.value = 'Please enter a valid URL (including https://).';
+      return;
+    }
     if (editingId.value === 'new') {
       const body = JSON.stringify({
         title: form.value.title,
@@ -184,6 +198,7 @@ async function remove(id) {
         "
       >
         <h3 style="margin-top: 0">{{ editingId === 'new' ? 'Create' : 'Edit' }} link</h3>
+        <p v-if="formErr" class="error">{{ formErr }}</p>
         <div class="field">
           <label>Title</label>
           <input v-model="form.title" />
