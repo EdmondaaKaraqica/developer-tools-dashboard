@@ -1,6 +1,29 @@
 /** In dev, Vite proxies /api to the Nest server. In production, set VITE_API_BASE if API is on another host. */
 const base = import.meta.env.VITE_API_BASE ?? '';
 
+async function errorFromResponse(r, fallback) {
+  let detail = fallback ?? r.statusText;
+  try {
+    const ct = r.headers.get('content-type');
+    if (ct && ct.includes('application/json')) {
+      const j = await r.json();
+      if (j?.message) {
+        detail = Array.isArray(j.message) ? j.message.join(', ') : j.message;
+      } else if (j?.error) {
+        detail = j.error;
+      }
+    } else {
+      detail = (await r.text()) || r.statusText;
+    }
+  } catch {
+    detail = r.statusText;
+  }
+
+  return detail
+    .replace(/url must be a URL address/i, 'Please enter a valid URL (including https://)')
+    .trim();
+}
+
 export async function fetchLinks({ page = 1, pageSize = 10 } = {}) {
   const qs = new URLSearchParams({
     page: String(page),
@@ -18,14 +41,7 @@ export async function login(username, password) {
     body: JSON.stringify({ username, password }),
   });
   if (!r.ok) {
-    let detail = r.statusText;
-    try {
-      const j = await r.json();
-      if (j?.message) detail = Array.isArray(j.message) ? j.message.join(', ') : j.message;
-    } catch {
-      /* ignore */
-    }
-    throw new Error(detail || 'Login failed');
+    throw new Error(await errorFromResponse(r, 'Login failed'));
   }
   return r.json();
 }
@@ -52,25 +68,7 @@ export async function authFetch(path, options = {}) {
     throw new Error('Session expired — sign in again');
   }
   if (!r.ok) {
-    let detail = r.statusText;
-    try {
-      const ct = r.headers.get('content-type');
-      if (ct && ct.includes('application/json')) {
-        const j = await r.json();
-        if (j?.message) {
-          detail = Array.isArray(j.message) ? j.message.join(', ') : j.message;
-        } else if (j?.error) {
-          detail = j.error;
-        }
-      } else {
-        detail = (await r.text()) || r.statusText;
-      }
-    } catch {
-      detail = r.statusText;
-    }
-
-    detail = detail.replace(/url must be a URL address/i, 'Please enter a valid URL (including https://)');
-    throw new Error(detail || r.statusText);
+    throw new Error(await errorFromResponse(r));
   }
   if (r.status === 204) return null;
   const ct = r.headers.get('content-type');
