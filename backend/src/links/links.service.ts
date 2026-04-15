@@ -40,22 +40,34 @@ export class LinksService implements OnModuleInit {
   private readonly logger = new Logger(LinksService.name);
   private indexName: string;
 
+  private isEsConflict(err: unknown): boolean {
+    if (err instanceof errors.ResponseError) return err.statusCode === 409;
+    const anyErr = err as any;
+    return (
+      anyErr?.statusCode === 409 ||
+      anyErr?.meta?.statusCode === 409 ||
+      anyErr?.body?.status === 409
+    );
+  }
+
   private normalizeUrl(url: string): string {
     const raw = url.trim();
     const u = new URL(raw);
 
-    // Canonicalize for uniqueness: lowercase scheme/host, drop fragment, drop default ports, drop trailing slash (except root)
+    // Canonicalize for uniqueness: lowercase scheme/host, drop fragment, drop default ports, drop trailing slash.
     u.protocol = u.protocol.toLowerCase();
     u.hostname = u.hostname.toLowerCase();
     u.hash = '';
     if ((u.protocol === 'http:' && u.port === '80') || (u.protocol === 'https:' && u.port === '443')) {
       u.port = '';
     }
-    if (u.pathname.length > 1) {
-      u.pathname = u.pathname.replace(/\/+$/, '');
-    }
+    u.pathname = u.pathname.replace(/\/+$/, '');
 
-    return u.toString();
+    // Build a stable canonical string; URL.toString() re-adds "/" for empty paths.
+    const origin = u.origin;
+    const path = u.pathname || '';
+    const search = u.search || '';
+    return `${origin}${path}${search}`;
   }
 
   private urlToId(url: string): string {
@@ -169,26 +181,6 @@ export class LinksService implements OnModuleInit {
       description: dto.description,
       sortOrder: dto.sortOrder ?? 0,
     };
-    // Guard against duplicates even if older docs used a different normalization.
-    const dup = await this.es.search<LinkDocument>({
-      index: this.indexName,
-      size: 0,
-      query: {
-        bool: {
-          should: [
-            { term: { url: normalizedUrl } },
-            { term: { url: dto.url.trim() } },
-          ],
-          minimum_should_match: 1,
-        },
-      },
-      track_total_hits: true,
-    });
-    const dupCount =
-      typeof dup.hits.total === 'number' ? dup.hits.total : (dup.hits.total?.value ?? 0);
-    if (dupCount > 0) {
-      throw new ConflictException('A link with this URL already exists');
-    }
     try {
       const res = await this.es.index({
         index: this.indexName,
@@ -201,7 +193,7 @@ export class LinksService implements OnModuleInit {
         throw new InternalServerErrorException('Failed to create link');
       }
     } catch (e: unknown) {
-      if (e instanceof errors.ResponseError && e.statusCode === 409) {
+      if (this.isEsConflict(e)) {
         throw new ConflictException('A link with this URL already exists');
       }
       throw e;
@@ -212,29 +204,62 @@ export class LinksService implements OnModuleInit {
   async update(id: string, dto: UpdateLinkDto): Promise<LinkEntity> {
     const doc = await this.findOne(id);
     const storedUrl = this.normalizeUrl(doc.url);
-    if (dto.url !== undefined) {
-      const nextUrl = this.normalizeUrl(dto.url);
-      if (nextUrl !== storedUrl) {
-        throw new BadRequestException(
-          'URL is immutable. Delete and recreate the link to change the URL.',
-        );
-      }
-    }
+    const nextUrl = dto.url !== undefined ? this.normalizeUrl(dto.url) : storedUrl;
+    const urlChanged = nextUrl !== storedUrl;
+
     const next: LinkDocument = {
       title: dto.title ?? doc.title,
-      url: storedUrl,
+      url: nextUrl,
       icon: dto.icon !== undefined ? dto.icon : doc.icon,
       description:
         dto.description !== undefined ? dto.description : doc.description,
       sortOrder: dto.sortOrder ?? doc.sortOrder,
     };
-    await this.es.index({
+
+    if (!urlChanged) {
+      await this.es.index({
+        index: this.indexName,
+        id,
+        document: next,
+        refresh: 'wait_for',
+      });
+      return { id, ...next };
+    }
+
+    // URL changed => ID changes (uniqueness enforced by deterministic ID + op_type=create).
+    const nextId = this.urlToId(nextUrl);
+    if (nextId !== id) {
+      const alreadyExists = await this.es.exists({
+        index: this.indexName,
+        id: nextId,
+      });
+      if (alreadyExists === true) {
+        throw new ConflictException('A link with this URL already exists');
+      }
+    }
+    try {
+      await this.es.index({
+        index: this.indexName,
+        id: nextId,
+        document: next,
+        op_type: 'create',
+        refresh: 'wait_for',
+      });
+    } catch (e: unknown) {
+      if (this.isEsConflict(e)) {
+        throw new ConflictException('A link with this URL already exists');
+      }
+      throw e;
+    }
+
+    // Best-effort delete of old doc after creating the new one.
+    await this.es.delete({
       index: this.indexName,
       id,
-      document: next,
       refresh: 'wait_for',
     });
-    return { id, ...next };
+
+    return { id: nextId, ...next };
   }
 
   async remove(id: string): Promise<void> {

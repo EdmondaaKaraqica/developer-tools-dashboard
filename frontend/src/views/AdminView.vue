@@ -60,6 +60,10 @@ onMounted(() => {
   if (loggedIn.value) loadLinks();
 });
 
+function scrollToTop() {
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
 function startCreate() {
   editingId.value = 'new';
   form.value = {
@@ -69,6 +73,7 @@ function startCreate() {
     description: '',
     sortOrder: links.value.length,
   };
+  scrollToTop();
 }
 
 function startEdit(l) {
@@ -80,6 +85,7 @@ function startEdit(l) {
     description: l.description ?? '',
     sortOrder: l.sortOrder ?? 0,
   };
+  scrollToTop();
 }
 
 function cancelEdit() {
@@ -90,16 +96,23 @@ async function save() {
   loadErr.value = '';
   busy.value = true;
   try {
-    const body = JSON.stringify({
-      title: form.value.title,
-      url: form.value.url,
-      icon: form.value.icon || undefined,
-      description: form.value.description || undefined,
-      sortOrder: Number(form.value.sortOrder) || 0,
-    });
     if (editingId.value === 'new') {
+      const body = JSON.stringify({
+        title: form.value.title,
+        url: form.value.url,
+        icon: form.value.icon || undefined,
+        description: form.value.description || undefined,
+        sortOrder: Number(form.value.sortOrder) || 0,
+      });
       await authFetch('/api/links', { method: 'POST', body });
     } else {
+      const body = JSON.stringify({
+        title: form.value.title,
+        url: form.value.url,
+        icon: form.value.icon || undefined,
+        description: form.value.description || undefined,
+        sortOrder: Number(form.value.sortOrder) || 0,
+      });
       await authFetch(`/api/links/${editingId.value}`, {
         method: 'PATCH',
         body,
